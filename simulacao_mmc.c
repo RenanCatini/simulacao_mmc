@@ -216,18 +216,21 @@ Estatistica calcular_estatistica(const double *amostras, int R) {
 
 int main() {
     // =========================================================================
-    // CONFIGURACAO DE EXPERIMENTOS 
+    // CONFIGURACAO DA BATERIA DE EXPERIMENTOS (3 PERFIS DE VELOCIDADE)
     // =========================================================================
-    int valores_c[]      = {1, 2, 4, 8, 16, 32};                          // M/M/1 vs M/M/2 vs M/M/4
-    double valores_rho[] = {0.20, 0.40, 0.60, 0.80, 0.90, 0.99};  // Niveis de ocupacao
-    double mu            = 0.125;                                 // Taxa de atendimento por servidor (S = 8.0s)
-    double tempo_simulacao = 500000.0;
-    int R                = 30;                                    // Numero de replicacoes (seeds) por cenario
-    unsigned int seed_base = 0;                                   // Seed inicial
+    const char *nomes_perfis[] = {"Rapido", "Mediano", "Lento"};
+    double valores_mu[]        = {0.50,     0.125,     0.05};     // S = 2s, 8s e 20s
+
+    int valores_c[]            = {1, 2, 4, 8, 16, 32};                 // Arquiteturas M/M/c
+    double valores_rho[]       = {0.20, 0.40, 0.60, 0.80, 0.90, 0.99};
+    double tempo_simulacao     = 500000.0;                         // Tempo fixo (T)
+    int R                      = 30;                               // Replicacoes por cenario
+    unsigned int seed_base     = 42;
     // =========================================================================
 
-    int num_c   = sizeof(valores_c) / sizeof(valores_c[0]);
-    int num_rho = sizeof(valores_rho) / sizeof(valores_rho[0]);
+    int num_perfis = sizeof(valores_mu) / sizeof(valores_mu[0]);
+    int num_c      = sizeof(valores_c) / sizeof(valores_c[0]);
+    int num_rho    = sizeof(valores_rho) / sizeof(valores_rho[0]);
 
     FILE *f_rodadas = fopen("resultados_rodadas.csv", "w");
     FILE *f_resumo  = fopen("resumo_experimento.csv", "w");
@@ -237,8 +240,8 @@ int main() {
         return 1;
     }
 
-    fprintf(f_rodadas, "c,rho_alvo,rodada,seed,lambda,mu,ocupacao,en,ew,erro_little,max_fila\n");
-    fprintf(f_resumo, "c,rho_alvo,lambda,mu,T,R,prob_espera_teo,"
+    fprintf(f_rodadas, "perfil,c,rho_alvo,rodada,seed,lambda,mu,ocupacao,en,ew,erro_little,max_fila\n");
+    fprintf(f_resumo, "perfil,c,rho_alvo,lambda,mu,T,R,prob_espera_teo,"
                       "rho_teorico,rho_sim_media,rho_ic_inf,rho_ic_sup,erro_rel_rho,"
                       "en_teorico,en_sim_media,en_ic_inf,en_ic_sup,erro_rel_en,"
                       "ew_teorico,ew_sim_media,ew_ic_inf,ew_ic_sup,erro_rel_ew,"
@@ -250,59 +253,67 @@ int main() {
     double *vet_ew   = (double *) malloc(R * sizeof(double));
     double *vet_max  = (double *) malloc(R * sizeof(double));
 
-    printf("=== INICIANDO BATERIA AUTOMATIZADA M/M/c (%d cenarios x %d rodadas) ===\n\n",
-           num_c * num_rho, R);
+    printf("=== BATERIA M/M/c: 3 PERFIS DE VELOCIDADE (%d cenarios x %d rodadas) ===\n\n",
+           num_perfis * num_c * num_rho, R);
 
-    for (int ic = 0; ic < num_c; ic++) {
-        int c = valores_c[ic];
+    for (int ip = 0; ip < num_perfis; ip++) {
+        const char *perfil = nomes_perfis[ip];
+        double mu          = valores_mu[ip];
 
-        for (int ir = 0; ir < num_rho; ir++) {
-            double rho_alvo = valores_rho[ir];
-            double lambda   = rho_alvo * c * mu; // Garante exatamente a ocupacao desejada
+        printf(">>> PERFIL: %s (mu = %.3f | Tempo medio atendimento S = %.1fs) <<<\n",
+               perfil, mu, 1.0 / mu);
 
-            double rho_teo, en_teo, ew_teo, prob_espera_teo;
-            calcular_teorico_mmc(lambda, mu, c, &rho_teo, &en_teo, &ew_teo, &prob_espera_teo);
+        for (int ic = 0; ic < num_c; ic++) {
+            int c = valores_c[ic];
 
-            for (int r = 0; r < R; r++) {
-                unsigned int seed_atual = seed_base + r;
-                rodadas[r] = executar_simulacao_mmc(r + 1, seed_atual, lambda, mu, c, tempo_simulacao);
+            for (int ir = 0; ir < num_rho; ir++) {
+                double rho_alvo = valores_rho[ir];
+                double lambda   = rho_alvo * c * mu;
 
-                vet_ocup[r] = rodadas[r].ocupacao;
-                vet_en[r]   = rodadas[r].en;
-                vet_ew[r]   = rodadas[r].ew;
-                vet_max[r]  = (double) rodadas[r].max_fila;
+                double rho_teo, en_teo, ew_teo, prob_espera_teo;
+                calcular_teorico_mmc(lambda, mu, c, &rho_teo, &en_teo, &ew_teo, &prob_espera_teo);
 
-                fprintf(f_rodadas, "%d,%.2f,%d,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.8f,%lu\n",
-                        c, rho_alvo, rodadas[r].rodada, rodadas[r].seed, lambda, mu,
-                        rodadas[r].ocupacao, rodadas[r].en, rodadas[r].ew,
-                        rodadas[r].erro_little, rodadas[r].max_fila);
+                for (int r = 0; r < R; r++) {
+                    unsigned int seed_atual = seed_base + r;
+                    rodadas[r] = executar_simulacao_mmc(r + 1, seed_atual, lambda, mu, c, tempo_simulacao);
+
+                    vet_ocup[r] = rodadas[r].ocupacao;
+                    vet_en[r]   = rodadas[r].en;
+                    vet_ew[r]   = rodadas[r].ew;
+                    vet_max[r]  = (double) rodadas[r].max_fila;
+
+                    fprintf(f_rodadas, "%s,%d,%.2f,%d,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.8f,%lu\n",
+                            perfil, c, rho_alvo, rodadas[r].rodada, rodadas[r].seed, lambda, mu,
+                            rodadas[r].ocupacao, rodadas[r].en, rodadas[r].ew,
+                            rodadas[r].erro_little, rodadas[r].max_fila);
+                }
+
+                Estatistica est_ocup = calcular_estatistica(vet_ocup, R);
+                Estatistica est_en   = calcular_estatistica(vet_en, R);
+                Estatistica est_ew   = calcular_estatistica(vet_ew, R);
+                Estatistica est_max  = calcular_estatistica(vet_max, R);
+
+                double erro_rel_ocup = fabs((est_ocup.media - rho_teo) / rho_teo) * 100.0;
+                double erro_rel_en   = fabs((est_en.media - en_teo) / en_teo) * 100.0;
+                double erro_rel_ew   = fabs((est_ew.media - ew_teo) / ew_teo) * 100.0;
+
+                fprintf(f_resumo, "%s,%d,%.2f,%.6f,%.6f,%.1f,%d,%.6f,"
+                                  "%.6f,%.6f,%.6f,%.6f,%.4f,"
+                                  "%.6f,%.6f,%.6f,%.6f,%.4f,"
+                                  "%.6f,%.6f,%.6f,%.6f,%.4f,"
+                                  "%.4f,%.4f,%.4f\n",
+                        perfil, c, rho_alvo, lambda, mu, tempo_simulacao, R, prob_espera_teo,
+                        rho_teo, est_ocup.media, est_ocup.ic_inferior, est_ocup.ic_superior, erro_rel_ocup,
+                        en_teo, est_en.media, est_en.ic_inferior, est_en.ic_superior, erro_rel_en,
+                        ew_teo, est_ew.media, est_ew.ic_inferior, est_ew.ic_superior, erro_rel_ew,
+                        est_max.media, est_max.ic_inferior, est_max.ic_superior);
+
+                printf("[%s | c=%-2d | rho=%.2f] E[N]: Teo=%6.2f vs Sim=%6.2f (Err=%5.2f%%) | "
+                       "E[W]: Teo=%7.2f vs Sim=%7.2f (Err=%5.2f%%)\n",
+                       perfil, c, rho_alvo, en_teo, est_en.media, erro_rel_en, ew_teo, est_ew.media, erro_rel_ew);
             }
-
-            Estatistica est_ocup = calcular_estatistica(vet_ocup, R);
-            Estatistica est_en   = calcular_estatistica(vet_en, R);
-            Estatistica est_ew   = calcular_estatistica(vet_ew, R);
-            Estatistica est_max  = calcular_estatistica(vet_max, R);
-
-            double erro_rel_ocup = fabs((est_ocup.media - rho_teo) / rho_teo) * 100.0;
-            double erro_rel_en   = fabs((est_en.media - en_teo) / en_teo) * 100.0;
-            double erro_rel_ew   = fabs((est_ew.media - ew_teo) / ew_teo) * 100.0;
-
-            fprintf(f_resumo, "%d,%.2f,%.6f,%.6f,%.1f,%d,%.6f,"
-                              "%.6f,%.6f,%.6f,%.6f,%.4f,"
-                              "%.6f,%.6f,%.6f,%.6f,%.4f,"
-                              "%.6f,%.6f,%.6f,%.6f,%.4f,"
-                              "%.4f,%.4f,%.4f\n",
-                    c, rho_alvo, lambda, mu, tempo_simulacao, R, prob_espera_teo,
-                    rho_teo, est_ocup.media, est_ocup.ic_inferior, est_ocup.ic_superior, erro_rel_ocup,
-                    en_teo, est_en.media, est_en.ic_inferior, est_en.ic_superior, erro_rel_en,
-                    ew_teo, est_ew.media, est_ew.ic_inferior, est_ew.ic_superior, erro_rel_ew,
-                    est_max.media, est_max.ic_inferior, est_max.ic_superior);
-
-            printf("[c=%d | rho=%.2f | lambda=%.4f] E[N]: Teo=%.3f vs Sim=%.3f (Erro=%.2f%%) | "
-                   "E[W]: Teo=%.3f vs Sim=%.3f (Erro=%.2f%%)\n",
-                   c, rho_alvo, lambda, en_teo, est_en.media, erro_rel_en, ew_teo, est_ew.media, erro_rel_ew);
         }
-        printf("-------------------------------------------------------------------------------------------------\n");
+        printf("----------------------------------------------------------------------------------------------------\n");
     }
 
     fclose(f_rodadas);
@@ -314,7 +325,6 @@ int main() {
     free(vet_ew);
     free(vet_max);
 
-    printf("\nConcluido! Todos os %d cenarios salvos em 'resumo_experimento.csv' e 'resultados_rodadas.csv'.\n",
-           num_c * num_rho);
+    printf("\nConcluido! Dados salvos em 'resumo_experimento.csv' e 'resultados_rodadas.csv'.\n");
     return 0;
 }

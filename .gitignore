@@ -1,6 +1,3 @@
-
-*.csv
-graficos/
 *.exe
 *.obj
 *.o
