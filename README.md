@@ -8,8 +8,6 @@ Este projeto apresenta um simulador de eventos discretos em C para sistemas de f
 
 * `simulacao_mmc.c`: Código-fonte em C com o motor da simulação.
 * `gerar_graficos.py`: Script Python para gerar os gráficos na pasta `graficos/png/`.
-* `resultados_rodadas.csv`: Dados brutos obtidos ao longo das 30 repetições de cada cenário.
-* `resumo_experimento.csv`: Resumo estatístico com médias, intervalos de confiança de 95% e erros relativos.
 
 ---
 
