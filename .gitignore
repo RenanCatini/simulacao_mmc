@@ -1,0 +1,7 @@
+
+*.csv
+graficos/
+*.exe
+*.obj
+*.o
+__pycache__/
