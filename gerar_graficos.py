@@ -258,6 +258,39 @@ for idx, c_val in enumerate(cs):
     if idx == 0:
         ax.legend(loc="upper left", frameon=True, framealpha=0.92, edgecolor="#CCCCCC", fontsize=7.5)
 
+# ==============================================================================
+# FIGURA 6: Validacao de Erlang-C — Probabilidade de Espera P_espera
+# ==============================================================================
+fig, axes = plt.subplots(1, 3, figsize=(13.2, 4.0), sharey=True)
+
+for idx, perfil in enumerate(perfis_ordem):
+    ax = axes[idx]
+    sub_p = df_resumo[df_resumo["perfil"] == perfil]
+
+    for c in cs:
+        grupo = sub_p[sub_p["c"] == c].sort_values("rho_alvo")
+        ax.plot(grupo["rho_alvo"], grupo["prob_espera_teo"], linestyle="--", linewidth=1.1,
+                color=cores_c[c], alpha=0.65)
+        ax.fill_between(grupo["rho_alvo"], grupo["prob_espera_ic_inf"], grupo["prob_espera_ic_sup"],
+                        color=cores_c[c], alpha=0.14, linewidth=0)
+        ax.plot(grupo["rho_alvo"], grupo["prob_espera_sim"], marker=marc_c[c], linestyle="-",
+                linewidth=1.5, markersize=5.0, color=cores_c[c],
+                markeredgecolor="white", markeredgewidth=0.5, label=f"M/M/{c}")
+
+    ax.set_title(f"({letras[idx]}) {rotulos_perfis[perfil]}", pad=8, fontsize=9.8)
+    ax.set_xlabel(r"Taxa de Ocupação ($\rho$)")
+    ax.set_ylabel(r"Probabilidade de Espera ($P_{\mathrm{espera}}$)")
+    ax.set_ylim(-0.02, 1.05)
+    ax.set_xticks([0.2, 0.4, 0.6, 0.8, 0.9, 0.99])
+    ax.set_xticklabels(["0,2", "0,4", "0,6", "0,8", "0,9", "0,99"])
+    estilizar_eixo(ax)
+    if idx == 0:
+        ax.legend(loc="upper left", frameon=True, framealpha=0.92, edgecolor="#CCCCCC", fontsize=8)
+
+plt.tight_layout(w_pad=1.4)
+salvar_png("fig6_probabilidade_espera")
+
+
 plt.tight_layout(w_pad=1.3)
 salvar_png("fig5_invariancia_en")
 

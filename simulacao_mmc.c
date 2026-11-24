@@ -1,7 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include <time.h>
+
+#define CAP_FILA 2000000
 
 typedef struct Info_ {
     unsigned long int numero_eventos;
@@ -14,6 +15,7 @@ typedef struct ResultadoRodada_ {
     unsigned int seed;
     double t_warmup;
     double ocupacao;
+    double prob_espera;
     double en;
     double ew;
     double erro_little;
@@ -36,7 +38,7 @@ void iniciaInfo(Info *info) {
 }
 
 double aleatorio() {
-    double u = rand() / ((double) RAND_MAX + 1.0);
+    double u = (rand() * 32768.0 + rand()) / 1073741824.0;   // 2 chamadas de rand() = 30 bits
     return 1.0 - u; // (0, 1]
 }
 
@@ -87,12 +89,17 @@ ResultadoRodada executar_simulacao_mmc(int rodada, unsigned int seed,
     Info en;
     iniciaInfo(&en);
 
+    double area_bruta = 0.0; // Acumulador continuo apenas para plotar o transiente sem degraus
     double tempo_decorrido = 0.0;
     double chegada_cliente = (-1.0 / lambda) * log(aleatorio());
 
     unsigned long int fila = 0;
     unsigned long int max_fila = 0;
     unsigned long int chegadas_estacionario = 0;
+    unsigned long int chegadas_com_espera = 0;
+    unsigned long int saidas_estacionario = 0;
+    double soma_tempo_sistema = 0.0;
+
     int servidores_ocupados = 0;
     double soma_atendimentos = 0.0;
 
@@ -103,7 +110,11 @@ ResultadoRodada executar_simulacao_mmc(int rodada, unsigned int seed,
     double en_anterior = -1.0;
 
     double *saida_servidor = (double *) malloc(c * sizeof(double));
-    if (!saida_servidor) {
+    double *chegada_fila = (double *) malloc(CAP_FILA * sizeof(double));       // clientes aguardando (FIFO)
+    double *chegada_servidor = (double *) malloc(c * sizeof(double));          // chegada do cliente em servico em cada servidor
+    int ini_fila = 0, fim_fila = 0;
+
+    if (!saida_servidor || !chegada_fila || !chegada_servidor) {
         fprintf(stderr, "Erro de alocacao de memoria.\n");
         exit(1);
     }
@@ -122,9 +133,8 @@ ResultadoRodada executar_simulacao_mmc(int rodada, unsigned int seed,
         double prox_evento = min_val(chegada_cliente, menor_saida);
 
         while (prox_amostra <= prox_evento && prox_amostra <= tempo_total) {
-            double area_inst = en.soma_areas + en.numero_eventos * (prox_amostra - en.tempo_anterior);
-            double jan = prox_amostra - inicio_medicao;
-            double en_inst = (jan > 0.0) ? (area_inst / jan) : 0.0;
+            double area_bruta_inst = area_bruta + en.numero_eventos * (prox_amostra - en.tempo_anterior);
+            double en_inst = area_bruta_inst / prox_amostra;
             double ew_inst = en_inst / lambda;
 
             if (idx_amostra < n_amostras) {
@@ -133,15 +143,20 @@ ResultadoRodada executar_simulacao_mmc(int rodada, unsigned int seed,
                 idx_amostra++;
             }
 
-            // Detecta estabilizacao: variacao relativa < 1% entre janelas de 1000s # Margem Descarte
+            // Detecta estabilizacao: variacao relativa < 0,1% entre janelas de 1000s (ou teto de 40%)
             if (!warmup_concluido) {
                 if ((en_anterior > 0.0 && en_inst > 0.0 && (fabs(en_inst - en_anterior) / en_inst) < 0.001) ||
                         prox_amostra >= tempo_total * 0.40) {
+                    // area_bruta ja e acumulada evento a evento: nao somar en.soma_areas aqui
                     en.soma_areas = 0.0;
                     en.tempo_anterior = prox_amostra;
 
                     chegadas_estacionario = 0;
+                    chegadas_com_espera = 0;
+                    saidas_estacionario = 0;
+                    soma_tempo_sistema = 0.0;
                     soma_atendimentos = 0.0;
+
                     for (int i = 0; i < c; i++) {
                         if (!isinf(saida_servidor[i]) && saida_servidor[i] > prox_amostra) {
                             double fim_efetivo = min_val(saida_servidor[i], tempo_total);
@@ -149,7 +164,7 @@ ResultadoRodada executar_simulacao_mmc(int rodada, unsigned int seed,
                         }
                     }
 
-                    max_fila = fila;
+                    max_fila = (fila > (unsigned long int) c) ? (fila - c) : 0;
                     warmup_concluido = 1;
                     inicio_medicao = prox_amostra;
                 }
@@ -160,20 +175,34 @@ ResultadoRodada executar_simulacao_mmc(int rodada, unsigned int seed,
         }
 
         if (prox_evento > tempo_total) {
-            en.soma_areas += en.numero_eventos * (tempo_total - en.tempo_anterior);
+            double dt = tempo_total - en.tempo_anterior;
+            en.soma_areas += en.numero_eventos * dt;
+            area_bruta += en.numero_eventos * dt;
             en.tempo_anterior = tempo_total;
             tempo_decorrido = tempo_total;
             break;
         }
 
         tempo_decorrido = prox_evento;
+        double dt_evento = tempo_decorrido - en.tempo_anterior;
+        en.soma_areas += en.numero_eventos * dt_evento;
+        area_bruta += en.numero_eventos * dt_evento;
+        en.tempo_anterior = tempo_decorrido;
 
         if (tempo_decorrido == chegada_cliente) {
+            if (warmup_concluido) {
+                chegadas_estacionario++;
+                if (servidores_ocupados == c) {
+                    chegadas_com_espera++;
+                }
+            }
+
             if (servidores_ocupados < c) {
                 for (int i = 0; i < c; i++) {
                     if (isinf(saida_servidor[i])) {
                         double duracao_servico = (-1.0 / mu) * log(aleatorio());
                         saida_servidor[i] = tempo_decorrido + duracao_servico;
+                        chegada_servidor[i] = tempo_decorrido;
                         if (warmup_concluido) {
                             double fim_efetivo = min_val(saida_servidor[i], tempo_total);
                             soma_atendimentos += (fim_efetivo - tempo_decorrido);
@@ -182,24 +211,35 @@ ResultadoRodada executar_simulacao_mmc(int rodada, unsigned int seed,
                         break;
                     }
                 }
+            } else {
+                chegada_fila[fim_fila] = tempo_decorrido;
+                fim_fila = (fim_fila + 1) % CAP_FILA;
             }
 
             fila++;
             if (warmup_concluido) {
-                chegadas_estacionario++;
-                if (fila > max_fila) max_fila = fila;
+                unsigned long int esperando = (fila > (unsigned long int) c) ? (fila - c) : 0;
+                if (esperando > max_fila) max_fila = esperando;
             }
 
             chegada_cliente = tempo_decorrido + (-1.0 / lambda) * log(aleatorio());
-
-            en.soma_areas += en.numero_eventos * (tempo_decorrido - en.tempo_anterior);
-            en.tempo_anterior = tempo_decorrido;
             en.numero_eventos++;
 
         } else {
+            // Cliente que realmente sai: o que ocupava o servidor idx_saida (nao necessariamente o mais antigo)
+            double t_chegada_cliente = chegada_servidor[idx_saida];
+
+            // Apenas clientes que chegaram APOS o warm-up entram em E[W]
+            if (warmup_concluido && t_chegada_cliente >= inicio_medicao) {
+                soma_tempo_sistema += (tempo_decorrido - t_chegada_cliente);
+                saidas_estacionario++;
+            }
+
             fila--;
 
             if (fila >= (unsigned long int) c) {
+                chegada_servidor[idx_saida] = chegada_fila[ini_fila];
+                ini_fila = (ini_fila + 1) % CAP_FILA;
                 double duracao_servico = (-1.0 / mu) * log(aleatorio());
                 saida_servidor[idx_saida] = tempo_decorrido + duracao_servico;
                 if (warmup_concluido) {
@@ -211,8 +251,6 @@ ResultadoRodada executar_simulacao_mmc(int rodada, unsigned int seed,
                 servidores_ocupados--;
             }
 
-            en.soma_areas += en.numero_eventos * (tempo_decorrido - en.tempo_anterior);
-            en.tempo_anterior = tempo_decorrido;
             en.numero_eventos--;
         }
     }
@@ -220,15 +258,18 @@ ResultadoRodada executar_simulacao_mmc(int rodada, unsigned int seed,
     double tempo_estacionario = tempo_decorrido - inicio_medicao;
     double lambda_efetivo = chegadas_estacionario / tempo_estacionario;
     double en_final = en.soma_areas / tempo_estacionario;
-    double ew_final = (lambda_efetivo > 0.0) ? (en_final / lambda_efetivo) : 0.0;
+    double ew_final = (saidas_estacionario > 0) ? (soma_tempo_sistema / saidas_estacionario) : 0.0;
 
     free(saida_servidor);
+    free(chegada_fila);
+    free(chegada_servidor);
 
     ResultadoRodada res;
     res.rodada = rodada;
     res.seed = seed;
     res.t_warmup = inicio_medicao;
     res.ocupacao = soma_atendimentos / (c * tempo_estacionario);
+    res.prob_espera = (chegadas_estacionario > 0) ? ((double) chegadas_com_espera / chegadas_estacionario) : 0.0;
     res.en = en_final;
     res.ew = ew_final;
     res.erro_little = en_final - (lambda_efetivo * ew_final);
@@ -274,7 +315,7 @@ int main() {
     double valores_rho[]       = {0.20, 0.40, 0.60, 0.80, 0.90, 0.99};
 
     double tempo_total         = 100000.0;
-    double passo_transiente    = 1000.0; 
+    double passo_transiente    = 1000.0;
 
     double margem_alvo         = 0.05;
     int R_min                  = 20;
@@ -294,16 +335,20 @@ int main() {
         return 1;
     }
 
-    fprintf(f_rodadas, "perfil,c,rho_alvo,rodada,seed,t_warmup_rodada,lambda,mu,ocupacao,en,ew,erro_little,max_fila\n");
+    fprintf(f_rodadas, "perfil,c,rho_alvo,rodada,seed,t_warmup_rodada,lambda,mu,ocupacao,prob_espera,en,ew,erro_little,max_fila\n");
     fprintf(f_transiente, "perfil,c,rho_alvo,tempo,en_acumulado,ew_acumulado\n");
-    fprintf(f_resumo, "perfil,c,rho_alvo,lambda,mu,T_total,T_warmup,R_necessario,margem_alvo,"
+    fprintf(f_resumo, "perfil,c,rho_alvo,lambda,mu,T_total,T_warmup,R_necessario,precisao_atingida,margem_alvo,"
                       "rho_teorico,rho_sim_media,rho_ic_inf,rho_ic_sup,erro_rel_rho,"
+                      "prob_espera_teo,prob_espera_sim,prob_espera_ic_inf,prob_espera_ic_sup,"
                       "en_teorico,en_sim_media,en_ic_inf,en_ic_sup,margem_ic_en,erro_rel_en,capturou_en,"
-                      "ew_teorico,ew_sim_media,ew_ic_inf,ew_ic_sup,margem_ic_ew,erro_rel_ew,capturou_ew\n");
+                      "ew_teorico,ew_sim_media,ew_ic_inf,ew_ic_sup,margem_ic_ew,erro_rel_ew,capturou_ew,"
+                      "erro_little_medio\n");
 
     double *vet_ocup   = (double *) malloc(R_max * sizeof(double));
+    double *vet_pesp   = (double *) malloc(R_max * sizeof(double));
     double *vet_en     = (double *) malloc(R_max * sizeof(double));
     double *vet_ew     = (double *) malloc(R_max * sizeof(double));
+    double *vet_little = (double *) malloc(R_max * sizeof(double));
     double *vet_warmup = (double *) malloc(R_max * sizeof(double));
     double *soma_s_en  = (double *) malloc(n_amostras * sizeof(double));
     double *soma_s_ew  = (double *) malloc(n_amostras * sizeof(double));
@@ -312,7 +357,7 @@ int main() {
     int coberturas_en = 0;
     int coberturas_ew = 0;
 
-    printf("=== CLUSTER M/M/c: AUTO-CORTE SIMPLES (<1%% em 1000s) + SEEDS COMUNS ===\n\n");
+    printf("=== CLUSTER M/M/c: VALIDACAO INDEPENDENTE E[W] + ERLANG-C + LITTLE ===\n\n");
 
     for (int ip = 0; ip < num_perfis; ip++) {
         const char *perfil = nomes_perfis[ip];
@@ -337,7 +382,8 @@ int main() {
                 }
 
                 int r = 0;
-                Estatistica est_ocup, est_en, est_ew, est_warmup;
+                int precisao_ok = 0;
+                Estatistica est_ocup, est_pesp, est_en, est_ew, est_little, est_warmup;
 
                 while (r < R_max) {
                     unsigned int seed_atual = (unsigned int) (r + 1);
@@ -348,23 +394,28 @@ int main() {
                     );
 
                     vet_ocup[r]   = res.ocupacao;
+                    vet_pesp[r]   = res.prob_espera;
                     vet_en[r]     = res.en;
                     vet_ew[r]     = res.ew;
+                    vet_little[r] = res.erro_little;
                     vet_warmup[r] = res.t_warmup;
                     r++;
 
-                    fprintf(f_rodadas, "%s,%d,%.2f,%d,%u,%.1f,%.6f,%.6f,%.6f,%.6f,%.6f,%.8f,%lu\n",
+                    fprintf(f_rodadas, "%s,%d,%.2f,%d,%u,%.1f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.8f,%lu\n",
                             perfil, c, rho_alvo, res.rodada, res.seed, res.t_warmup, lambda, mu,
-                            res.ocupacao, res.en, res.ew, res.erro_little, res.max_fila);
+                            res.ocupacao, res.prob_espera, res.en, res.ew, res.erro_little, res.max_fila);
 
                     est_ocup   = calcular_estatistica(vet_ocup, r);
+                    est_pesp   = calcular_estatistica(vet_pesp, r);
                     est_en     = calcular_estatistica(vet_en, r);
                     est_ew     = calcular_estatistica(vet_ew, r);
+                    est_little = calcular_estatistica(vet_little, r);
                     est_warmup = calcular_estatistica(vet_warmup, r);
 
                     if (r >= R_min &&
                         est_en.margem_rel <= margem_alvo &&
                         est_ew.margem_rel <= margem_alvo) {
+                        precisao_ok = 1;
                         break;
                     }
                 }
@@ -386,21 +437,27 @@ int main() {
                 coberturas_en += cap_en;
                 coberturas_ew += cap_ew;
 
-                fprintf(f_resumo, "%s,%d,%.2f,%.6f,%.6f,%.1f,%.1f,%d,%.4f,"
+                fprintf(f_resumo, "%s,%d,%.2f,%.6f,%.6f,%.1f,%.1f,%d,%d,%.4f,"
                                   "%.6f,%.6f,%.6f,%.6f,%.4f,"
+                                  "%.6f,%.6f,%.6f,%.6f,"
                                   "%.6f,%.6f,%.6f,%.6f,%.4f,%.4f,%d,"
-                                  "%.6f,%.6f,%.6f,%.6f,%.4f,%.4f,%d\n",
-                        perfil, c, rho_alvo, lambda, mu, tempo_total, est_warmup.media, r, margem_alvo,
+                                  "%.6f,%.6f,%.6f,%.6f,%.4f,%.4f,%d,"
+                                  "%.6f\n",
+                        perfil, c, rho_alvo, lambda, mu, tempo_total, est_warmup.media, r, precisao_ok, margem_alvo,
                         rho_teo, est_ocup.media, est_ocup.ic_inferior, est_ocup.ic_superior, erro_rel_ocup,
+                        prob_espera_teo, est_pesp.media, est_pesp.ic_inferior, est_pesp.ic_superior,
                         en_teo, est_en.media, est_en.ic_inferior, est_en.ic_superior,
                         est_en.margem_rel * 100.0, erro_rel_en, cap_en,
                         ew_teo, est_ew.media, est_ew.ic_inferior, est_ew.ic_superior,
-                        est_ew.margem_rel * 100.0, erro_rel_ew, cap_ew);
+                        est_ew.margem_rel * 100.0, erro_rel_ew, cap_ew,
+                        est_little.media);
 
-                printf("[%s | c=%-2d | rho=%.2f] WarmupMed=%6.0fs | R=%-3d | "
-                       "E[N]: Teo=%6.2f IC=[%6.2f,%6.2f] (%s) | "
-                       "E[W]: Teo=%6.3fs IC=[%6.3f,%6.3f] (%s)\n",
+                printf("[%s|c=%d|rho=%.2f] Tw=%5.0fs R=%-3d | "
+                       "P_esp:%.3f[%.3f,%.3f] | "
+                       "E[N]:%.2f[%.2f,%.2f](%s) | "
+                       "E[W]:%.3f[%.3f,%.3f](%s)\n",
                        perfil, c, rho_alvo, est_warmup.media, r,
+                       prob_espera_teo, est_pesp.ic_inferior, est_pesp.ic_superior,
                        en_teo, est_en.ic_inferior, est_en.ic_superior, cap_en ? "OK" : "FORA",
                        ew_teo, est_ew.ic_inferior, est_ew.ic_superior, cap_ew ? "OK" : "FORA");
             }
@@ -413,8 +470,10 @@ int main() {
     fclose(f_transiente);
 
     free(vet_ocup);
+    free(vet_pesp);
     free(vet_en);
     free(vet_ew);
+    free(vet_little);
     free(vet_warmup);
     free(soma_s_en);
     free(soma_s_ew);
