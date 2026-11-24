@@ -2,3 +2,4 @@
 *.obj
 *.o
 __pycache__/
+*.csv

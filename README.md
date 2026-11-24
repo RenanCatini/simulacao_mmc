@@ -1,84 +1,121 @@
-# Simulação de Filas M/M/c e Análise de Desempenho
+# Simulação de filas M/M/c
 
-Este projeto apresenta um simulador de eventos discretos em C para sistemas de filas M/M/c e um script em Python para visualização de dados. O objetivo é analisar o comportamento do tempo médio de espera no sistema ($E[W]$), do número médio de clientes ($E[N]$) e do erro relativo de simulação sob diferentes configurações de servidores ($c$), taxas de ocupação ($\rho$) e velocidades de atendimento ($\mu$).
+Projeto de simulação de eventos discretos para filas M/M/c, desenvolvido em C, com processamento dos resultados e geração de gráficos em Python. O experimento compara medidas simuladas com os valores teóricos de Erlang-C para diferentes números de servidores, taxas de ocupação e perfis de atendimento.
 
----
+As medidas analisadas são:
 
-## Estrutura de Arquivos
+- $\rho$: taxa de ocupação do cluster;
+- $E[N]$: número médio de requisições no sistema;
+- $E[W]$: tempo médio de permanência no sistema.
 
-* `simulacao_mmc.c`: Código-fonte em C com o motor da simulação.
-* `gerar_graficos.py`: Script Python para gerar os gráficos na pasta `graficos/png/`.
+## Estrutura do projeto
 
----
+- [`simulacao_mmc.c`](simulacao_mmc.c): simulador principal, análise teórica, réplicas independentes e exportação dos dados.
+- [`gerar_graficos.py`](gerar_graficos.py): geração das cinco figuras na pasta `graficos/png/`.
+- [`simulacao_v3.c`](simulacao_v3.c): versão anterior com um único servidor e entrada interativa.
+- [`simulacao_mmc.exe`](simulacao_mmc.exe): executável já compilado para Windows.
+- [`resultados_rodadas.csv`](resultados_rodadas.csv): resultados de todas as rodadas.
+- [`resumo_experimento.csv`](resumo_experimento.csv): estatísticas agregadas e intervalos de confiança.
+- [`serie_transiente.csv`](serie_transiente.csv): séries temporais médias usadas no estudo transiente.
+- [`saida.txt`](saida.txt): captura de uma execução do experimento.
+- [`graficos/png/`](graficos/png): figuras geradas pelo Python.
 
-## Como Compilar e Executar
+## Configuração do experimento
 
-### No Linux
+O programa atual executa 72 cenários: três perfis de serviço, quatro tamanhos de cluster e seis taxas de ocupação.
 
-1. Abra o terminal na pasta do projeto e compile o código em C:
-   ```bash
-   gcc simulacao_mmc.c -o simulacao_mmc -O2 -lm
-   ```
+| Perfil | $\mu$ | Tempo médio de serviço $S=1/\mu$ |
+|---|---:|---:|
+| Rápido | 20 requisições/s | 50 ms |
+| Mediano | 5 requisições/s | 200 ms |
+| Lento | 2 requisições/s | 500 ms |
 
-2. Execute o simulador para gerar os arquivos de dados CSV:
-   ```bash
-   ./simulacao_mmc
-   ```
+- Servidores: $c \in \{1, 2, 4, 8\}$;
+- Ocupação: $\rho \in \{0{,}20;\ 0{,}40;\ 0{,}60;\ 0{,}80;\ 0{,}90;\ 0{,}99\}$;
+- Taxa de chegada: $\lambda=\rho c\mu$;
+- Tempo total de cada rodada: 100.000 unidades de tempo;
+- Amostragem da série transiente: a cada 1.000 unidades de tempo;
+- Margem relativa desejada: 5%;
+- Confiança das réplicas: $95\%$ por t-Student;
+- Mínimo de réplicas: 20;
+- Máximo de réplicas: 300.
 
-3. Instale as dependências em Python (se necessário) e gere as figuras:
-   ```bash
-   pip install pandas matplotlib numpy
-   python3 gerar_graficos.py
-   ```
+Cada cenário usa seeds comuns e consecutivas, com a primeira semente iniciando em 1. O aquecimento é identificado em amostras temporais de 1.000 unidades: o processo considera estabilizado quando a variação relativa de $E[N](t)$ fica abaixo de 1% em uma comparação consecutiva, ou quando alcança 40% do tempo total.
 
-### No Windows
+## Método de comparação
 
-1. Abra o Prompt de Comando (CMD) ou PowerShell na pasta do projeto (certifique-se de ter o GCC/MinGW no PATH):
-   ```cmd
-   gcc simulacao_mmc.c -o simulacao_mmc.exe -O2 -lm
-   ```
+Para o modelo teórico M/M/c:
 
-2. Execute a simulação:
-   ```cmd
-   simulacao_mmc.exe
-   ```
+$$
+a=\frac{\lambda}{\mu},
+\qquad
+\rho=\frac{\lambda}{c\mu}
+$$
 
-3. Instale as bibliotecas necessárias e execute o script dos gráficos:
-   ```cmd
-   pip install pandas matplotlib numpy
-   python gerar_graficos.py
-   ```
+$$
+C=\frac{\dfrac{a^c}{c!\,(1-\rho)}}{\displaystyle\sum_{k=0}^{c-1}\frac{a^k}{k!}+\frac{a^c}{c!\,(1-\rho)}}
+$$
 
----
+A implementação usa Erlang-C para calcular a probabilidade de espera, o número médio no sistema e a latência teórica:
 
-## Parâmetros do Experimento
+$$
+E[N]_{\text{teo}}=a+\frac{\rho C}{1-\rho}
+\qquad
+E[W]_{\text{teo}}=\frac{E[N]_{\text{teo}}}{\lambda}
+$$
 
-As simulações consideram as seguintes variações:
+No simulador, as chegadas seguem processo de Poisson e os tempos de serviço seguem distribuição exponencial.
 
-* **Perfis de Atendimento ($\mu$):**
-  * **Rápido:** $\mu = 0{,}50\,\mathrm{s}^{-1}$ (tempo médio de atendimento $S = 2\,\mathrm{s}$)
-  * **Mediano:** $\mu = 0{,}125\,\mathrm{s}^{-1}$ (tempo médio de atendimento $S = 8\,\mathrm{s}$)
-  * **Lento:** $\mu = 0{,}05\,\mathrm{s}^{-1}$ (tempo médio de atendimento $S = 20\,\mathrm{s}$)
-* **Número de Servidores ($c$):** $1, 2, 4, 8, 16$ e $32$.
-* **Taxa de Ocupação ($\rho$):** $0{,}20$, $0{,}40$, $0{,}60$, $0{,}80$, $0{,}90$ e $0{,}99$.
-* **Duração da Simulação ($T$):** Fixo em $500.000\,\mathrm{s}$ por rodada, com $30$ repetições independentes (*seeds*).
+## Compilação e execução
 
----
+### Windows
 
-## Análise Direta dos Gráficos
+No Prompt de Comando ou no PowerShell, dentro da pasta do projeto:
 
-### Figura 1: Tempo Médio no Sistema ($E[W]$) por Perfil
-* **Escala temporal:** À medida que o atendimento se torna mais lento (do perfil Rápido ao Lento), toda a curva do tempo de permanência é deslocada para cima. Isso ocorre porque o piso mínimo de tempo no sistema é determinado pelo próprio tempo de serviço ($S = 2\,\mathrm{s}$, $8\,\mathrm{s}$ e $20\,\mathrm{s}$).
-* **Comportamento assintótico:** Independente da velocidade, o tempo médio no sistema aumenta acentuadamente quando a taxa de ocupação ultrapassa $\rho = 0{,}80$, seguindo com precisão a curva teórica de Erlang-C.
+```powershell
+gcc simulacao_mmc.c -o simulacao_mmc.exe -O2 -lm
+.\simulacao_mmc.exe
+python gerar_graficos.py
+```
 
-### Figura 2: Número Médio de Clientes ($E[N]$) e Invariância
-* **Independência da velocidade ($\mu$):** Nos seis painéis ($c = 1$ a $c = 32$), os resultados simulados dos três perfis sobrepõem-se exatamente sobre a linha teórica. Isso confirma que a quantidade total de clientes dentro do sistema depende unicamente da taxa de carga ($\rho$) e da quantidade de servidores ($c$).
-* **Capacidade em carga baixa:** Em $\rho = 0{,}20$, a quantidade média de clientes cresce de $0{,}25$ em $c = 1$ para $6{,}4$ em $c = 32$, pois mais servidores ativos sustentam o mesmo fluxo total sem formar filas significativas.
+### Linux
 
-### Figura 3: Trade-off entre Servidores ($c$) e Velocidade ($\mu$)
-* **Saturação de paralelismo em baixa carga:** Para ocupações até $\rho = 0{,}60$, adicionar mais de $4$ ou $8$ servidores praticamente não reduz o tempo de resposta, pois o valor estabiliza no tempo próprio de atendimento.
-* **Equivalência em alta carga:** Em $\rho = 0{,}90$, uma infraestrutura com $32$ servidores lentos obtém um tempo médio de resposta de aproximadamente $23\,\mathrm{s}$, valor próximo ao de $4$ servidores medianos ($24\,\mathrm{s}$) ou de $1$ único servidor rápido ($20\,\mathrm{s}$).
+```bash
+gcc simulacao_mmc.c -o simulacao_mmc -O2 -lm
+./simulacao_mmc
+python3 gerar_graficos.py
+```
 
-### Figura 4: Erro Relativo em Regimes Críticos ($\rho \in \{0{,}80; 0{,}90; 0{,}99\}$)
-* **Alta precisão até $\rho = 0{,}90$:** O erro relativo entre a simulação e a teoria permanece abaixo de $2\%$ em todas as configurações para $\rho = 0{,}80$ e $\rho = 0{,}90$.
-* **Efeito transiente em $\rho = 0{,}99$:** No regime de extrema ocupação ($\rho = 0{,}99$), o erro cresce significativamente no perfil Lento (chegando a $30{,}7\%$ para $c = 1$). Como o tempo total de simulação é fixado em $500.000\,\mathrm{s}$, o servidor lento processa dez vezes menos eventos que o rápido, tornando a média mais sensível ao período inicial de aquecimento (onde o sistema inicia vazio).
+É necessário ter Python com os pacotes `pandas`, `matplotlib` e `numpy`:
+
+```powershell
+pip install pandas matplotlib numpy
+```
+
+## Arquivos gerados
+
+O simulador escreve:
+
+- `resultados_rodadas.csv`: ocupação, $E[N]$, $E[W]$, erro de Little, fila máxima e período de aquecimento de cada rodada;
+- `resumo_experimento.csv`: média, intervalo de confiança, margem relativa, erro teórico e cobertura de $E[N]$ e $E[W]$ por cenário;
+- `serie_transiente.csv`: evolução média acumulada de $E[N]$ e $E[W]$.
+
+O script Python gera:
+
+1. `fig1_periodo_transiente.png`: convergência da série transiente;
+2. `fig2_replicacoes_necessarias.png`: número de réplicas necessárias;
+3. `fig3_cobertura_ic.png`: cobertura dos intervalos de confiança em $\rho=0{,}90$;
+4. `fig4_latencia_perfis_painel.png`: latência simulada e teórica por perfil;
+5. `fig5_invariancia_en.png`: invariância de $E[N]$ em relação ao perfil de serviço.
+
+## Resultados observados
+
+Da execução registrada em `saida.txt`:
+
+- cobertura do intervalo de 95% para $E[N]$: 69 de 72 cenários (95,8%);
+- cobertura do intervalo de 95% para $E[W]$: 62 de 72 cenários (86,1%);
+- em $\rho=0{,}99$, o número necessário de réplicas cresce com a correlação temporal e pode alcançar o limite de 300;
+- os resultados simulados acompanham a teoria de Erlang-C, especialmente para cargas moderadas;
+- a latência cresce fortemente próximo de $\rho=1$, enquanto $E[N]$ permanece independente do perfil $\mu$ para uma mesma combinação $(c,\rho)$.
+
+Os gráficos devem ser interpretados considerando o aquecimento, o número de réplicas de cada cenário e a precisão estatística registrada nos intervalos de confiança.
